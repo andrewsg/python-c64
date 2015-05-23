@@ -161,36 +161,36 @@ class CPU():
             0x00: (self.BRK, None),
             0x01: (self.ORA, "IND_X"),
             0x02: None,
-            0x03: (self.SLO, "IND_X"),
+            0x03: None, #(self.SLO, "IND_X"),
             0x04: (self.NOP, "ZP"),
             0x05: (self.ORA, "ZP"),
             0x06: (self.ASL, "ZP"),
-            0x07: (self.SLO, "ZP"),
+            0x07: None, #(self.SLO, "ZP"),
             0x08: (self.PHP, None),
             0x09: (self.ORA, "IMM"),
             0x0a: (self.ASL, None),
-            0x0b: (self.ANC, "IMM"),
+            0x0b: None, #(self.ANC, "IMM"),
             0x0c: (self.NOP, "ABS"),
             0x0d: (self.ORA, "ABS"),
             0x0e: (self.ASL, "ABS"),
-            0x0f: (self.SLO, "ABS"),
+            0x0f: None, #(self.SLO, "ABS"),
 
             0x10: (self.BPL, "REL"),
             0x11: (self.ORA, "IND_Y"),
             0x12: None,
-            0x13: (self.SLO, "IND_Y"),
+            0x13: None, #(self.SLO, "IND_Y"),
             0x14: (self.NOP, "ZP_X"),
             0x15: (self.ORA, "ZP_X"),
             0x16: (self.ASL, "ZP_X"),
-            0x17: (self.SLO, "ZP_X"),
+            0x17: None, #(self.SLO, "ZP_X"),
             0x18: (self.CLC, None),
             0x19: (self.ORA, "ABS_Y"),
             0x1a: (self.NOP, None),
-            0x1b: (self.SLO, "ABS_Y"),
+            0x1b: None, #(self.SLO, "ABS_Y"),
             0x1c: (self.NOP, "ABS_X"),
             0x1d: (self.ORA, "ABS_X"),
             0x1e: (self.ASL, "ABS_X"),
-            0x1f: (self.SLO, "ABS_X"),
+            0x1f: None, #(self.SLO, "ABS_X"),
 
             0x20: (self.JSR, "ABS"),
             0x21: (self.AND, "IND_X"),
@@ -459,7 +459,7 @@ class CPU():
     # Addressing modes
     def addr_indirect(self, add_to_index=0, add_to_address=0):
         zp = (self.next_word + add_to_index) & 0xff
-        address = (((self.ram.get(zp) << 8) | (self.ram.get(zp+1)) + add_to_address) & 0xffff
+        address = (((self.ram.get(zp) << 8) | (self.ram.get(zp+1))) + add_to_address) & 0xffff
         return self.ram.get(address)
 
     # Instructions

@@ -1,9 +1,6 @@
 from enum import Enum
 from functools import partial
 
-class Opcode(Enum):
-    pass
-
 def sanitize_value(value, word_length):
     if not isinstance(value, int):
         value = int(value)
@@ -141,10 +138,315 @@ class CPU():
         else:
             self.ram = RAM(word_length=8, size=0x10000, initial_contents=initial_ram)
 
+        # These need to be bound to self, so they're defined in the constructor
+        self.ADDRESSING_MODES = {
+            None: lambda: None,
+            "A": lambda: self.reg.A, # contents of A
+            "IMM": lambda: self.next_word(), # next word as literal
+            "REL": lambda: self.next_word() - 128, #  next word as signed integer
+            "ABS": lambda: self.ram.get(self.next_two()), # get next 16 bits as address
+            "ZP": lambda: self.ram.get(self.next_word()), # get next 8 bits as address for zeroth memory page
+            "ABS_X": lambda: self.ram.get((self.next_two() + self.reg.X) & 0xffff), # as with ABS but add X to address
+            "ABS_Y": lambda: self.ram.get((self.next_two() + self.reg.Y) & 0xffff), # as with ABS but add Y to address
+            "ZP_X": lambda: self.ram.get((self.next_word() + self.reg.X) & 0xff), # as with ZP but add X to address
+            "ZP_Y": lambda: self.ram.get((self.next_word() + self.reg.Y) & 0xff), # as with ZP but add Y to address
+            "IND": self.addr_indirect, # Use next word as zero-page addr and the following byte from that zero page
+                                            # as another 8 bits, and combine the two into a 16-bit address
+            "IND_X": lambda: self.addr_indirect(add_to_index=self.reg.X), # As with the above, but add X to the ZP
+            "IND_Y": lambda: self.addr_indirect(add_to_address=self.reg.Y), # As with the above, but add Y to the
+                                                                            # resulting address (not the same as IND_X!)
+        }
+
+        self.OPCODES = {
+            0x00: (self.BRK, None),
+            0x01: (self.ORA, "IND_X"),
+            0x02: None,
+            0x03: (self.SLO, "IND_X"),
+            0x04: (self.NOP, "ZP"),
+            0x05: (self.ORA, "ZP"),
+            0x06: (self.ASL, "ZP"),
+            0x07: (self.SLO, "ZP"),
+            0x08: (self.PHP, None),
+            0x09: (self.ORA, "IMM"),
+            0x0a: (self.ASL, None),
+            0x0b: (self.ANC, "IMM"),
+            0x0c: (self.NOP, "ABS"),
+            0x0d: (self.ORA, "ABS"),
+            0x0e: (self.ASL, "ABS"),
+            0x0f: (self.SLO, "ABS"),
+
+            0x10: (self.BPL, "REL"),
+            0x11: (self.ORA, "IND_Y"),
+            0x12: None,
+            0x13: (self.SLO, "IND_Y"),
+            0x14: (self.NOP, "ZP_X"),
+            0x15: (self.ORA, "ZP_X"),
+            0x16: (self.ASL, "ZP_X"),
+            0x17: (self.SLO, "ZP_X"),
+            0x18: (self.CLC, None),
+            0x19: (self.ORA, "ABS_Y"),
+            0x1a: (self.NOP, None),
+            0x1b: (self.SLO, "ABS_Y"),
+            0x1c: (self.NOP, "ABS_X"),
+            0x1d: (self.ORA, "ABS_X"),
+            0x1e: (self.ASL, "ABS_X"),
+            0x1f: (self.SLO, "ABS_X"),
+
+            0x20: (self.JSR, "ABS"),
+            0x21: (self.AND, "IND_X"),
+            0x22: None,
+            0x23: (self.RLA, "IND_X"),
+            0x24: (self.BIT, "ZP"),
+            0x25: (self.AND, "ZP"),
+            0x26: (self.ROL, "ZP"),
+            0x27: (self.RLA, "ZP"),
+            0x28: (self.PLP, None),
+            0x29: (self.AND, "IMM"),
+            0x2a: (self.ROL, None),
+            0x2b: (self.ANC, "IMM"),
+            0x2c: (self.BIT, "ABS"),
+            0x2d: (self.AND, "ABS"),
+            0x2e: (self.ROL, "ABS"),
+            0x2f: (self.RLA, "ABS"),
+
+            0x30: (self.BMI, "REL"),
+            0x31: (self.AND, "IND_Y"),
+            0x32: None,
+            0x33: (self.RLA, "IND_Y"),
+            0x34: (self.NOP, "ZP_X"),
+            0x35: (self.AND, "ZP_X"),
+            0x36: (self.ROL, "ZP_X"),
+            0x37: (self.RLA, "ZP_X"),
+            0x38: (self.SEC, None),
+            0x39: (self.AND, "ABS_Y"),
+            0x3a: (self.NOP, None),
+            0x3b: (self.RLA, "ABS_Y"),
+            0x3c: (self.NOP, "ABS_X"),
+            0x3d: (self.AND, "ABS_X"),
+            0x3e: (self.ROL, "ABS_X"),
+            0x3f: (self.RLA, "ABS_X"),
+
+            0x40: (self.RTI, None),
+            0x41: (self.EOR, "IND_X"),
+            0x42: None,
+            0x43: (self.SRE, "IND_X"),
+            0x44: (self.NOP, "ZP"),
+            0x45: (self.EOR, "ZP"),
+            0x46: (self.LSR, "ZP"),
+            0x47: (self.SRE, "ZP"),
+            0x48: (self.PHA, None),
+            0x49: (self.EOR, "IMM"),
+            0x4a: (self.LSR, None),
+            0x4b: (self.ALR, "IMM"),
+            0x4c: (self.JMP, "ABS"),
+            0x4d: (self.EOR, "ABS"),
+            0x4e: (self.LSR, "ABS"),
+            0x4f: (self.SRE, "ABS"),
+
+            0x50: (self.BVC, "REL"),
+            0x51: (self.EOR, "IND_Y"),
+            0x52: None,
+            0x53: (self.SRE, "IND_Y"),
+            0x54: (self.NOP, "ZP_X"),
+            0x55: (self.EOR, "ZP_X"),
+            0x56: (self.LSR, "ZP_X"),
+            0x57: (self.SRE, "ZP_X"),
+            0x58: (self.CLI, None),
+            0x59: (self.EOR, "ABS_Y"),
+            0x5a: (self.NOP, None),
+            0x5b: (self.SRE, "ABS_Y"),
+            0x5c: (self.NOP, "ABS_X"),
+            0x5d: (self.EOR, "ABS_X"),
+            0x5e: (self.LSR, "ABS_X"),
+            0x5f: (self.SRE, "ABS_X"),
+
+            0x60: (self.RTS, None),
+            0x61: (self.ADC, "IND_X"),
+            0x62: None,
+            0x63: (self.RRA, "IND_X"),
+            0x64: (self.NOP, "ZP"),
+            0x65: (self.ADC, "ZP"),
+            0x66: (self.ROR, "ZP"),
+            0x67: (self.RRA, "ZP"),
+            0x68: (self.PLA, None),
+            0x69: (self.ADC, "IMM"),
+            0x6a: (self.ROR, None),
+            0x6b: (self.ARR, "IMM"),
+            0x6c: (self.JMP, "IND"),
+            0x6d: (self.ADC, "ABS"),
+            0x6e: (self.ROR, "ABS"),
+            0x6f: (self.RRA, "ABS"),
+
+            0x70: (self.BVS, "REL"),
+            0x71: (self.ADC, "IND_Y"),
+            0x72: None,
+            0x73: (self.RRA, "IND_Y"),
+            0x74: (self.NOP, "ZP_X"),
+            0x75: (self.ADC, "ZP_X"),
+            0x76: (self.ROR, "ZP_X"),
+            0x77: (self.RRA, "ZP_X"),
+            0x78: (self.SEI, None),
+            0x79: (self.ADC, "ABS_Y"),
+            0x7a: (self.NOP, None),
+            0x7b: (self.RRA, "ABS_Y"),
+            0x7c: (self.NOP, "ABS_X"),
+            0x7d: (self.ADC, "ABS_X"),
+            0x7e: (self.ROR, "ABS_X"),
+            0x7f: (self.RRA, "ABS_X"),
+
+            0x80: (self.NOP, "IMM"),
+            0x81: (self.STA, "IND_X"),
+            0x82: (self.NOP, "IMM"),
+            0x83: (self.SAX, "IND_X"),
+            0x84: (self.STY, "ZP"),
+            0x85: (self.STA, "ZP"),
+            0x86: (self.STX, "ZP"),
+            0x87: (self.SAX, "ZP"),
+            0x88: (self.DEY, None),
+            0x89: (self.NOP, "IMM"),
+            0x8a: (self.TXA, None),
+            0x8b: (self.XAA, "IMM"),
+            0x8c: (self.STY, "ABS"),
+            0x8d: (self.STA, "ABS"),
+            0x8e: (self.STX, "ABS"),
+            0x8f: (self.SAX, "ABS"),
+
+            0x90: (self.BCC, "REL"),
+            0x91: (self.STA, "IND_Y"),
+            0x92: None,
+            0x93: (self.AHX, "IND_Y"),
+            0x94: (self.STY, "ZP_X"),
+            0x95: (self.STA, "ZP_X"),
+            0x96: (self.STX, "ZP_Y"),
+            0x97: (self.SAX, "ZP_Y"),
+            0x98: (self.TYA, None),
+            0x99: (self.STA, "ABS_Y"),
+            0x9a: (self.TXS, None),
+            0x9b: (self.TAS, "ABS_Y"),
+            0x9c: (self.SHY, "ABS_X"),
+            0x9d: (self.STA, "ABS_X"),
+            0x9e: (self.SHX, "ABS_X"),
+            0x9f: (self.AHX, "ABS_X"),
+
+            0xa0: (self.LDY, "IMM"),
+            0xa1: (self.LDA, "IND_X"),
+            0xa2: (self.LDX, "IMM"),
+            0xa3: (self.LAX, "IND_X"),
+            0xa4: (self.LDY, "ZP"),
+            0xa5: (self.LDA, "ZP"),
+            0xa6: (self.LDX, "ZP"),
+            0xa7: (self.LAX, "ZP"),
+            0xa8: (self.TAY, None),
+            0xa9: (self.LDA, "IMM"),
+            0xaa: (self.TAX, None),
+            0xab: (self.LAX, "IMM"),
+            0xac: (self.LDY, "ABS"),
+            0xad: (self.LDA, "ABS"),
+            0xae: (self.LDX, "ABS"),
+            0xaf: (self.LAX, "ABS"),
+
+            0xb0: (self.BCS, "REL"),
+            0xb1: (self.LDA, "IND_Y"),
+            0xb2: None,
+            0xb3: (self.LAX, "IND_Y"),
+            0xb4: (self.LDY, "ZP_X"),
+            0xb5: (self.LDA, "ZP_X"),
+            0xb6: (self.LDX, "ZP_X"),
+            0xb7: (self.LAX, "ZP_X"),
+            0xb8: (self.CLV, None),
+            0xb9: (self.LDA, "ABS_Y"),
+            0xba: (self.TSX, None),
+            0xbb: (self.LAS, "ABS_Y"),
+            0xbc: (self.LDY, "ABS_X"),
+            0xbd: (self.LDA, "ABS_X"),
+            0xbe: (self.LDX, "ABS_X"),
+            0xbf: (self.LAX, "ABS_X"),
+
+            0xc0: (self.CPY, "IMM"),
+            0xc1: (self.CMP, "IND_X"),
+            0xc2: (self.NOP, "IMM"),
+            0xc3: (self.DCP, "IND_X"),
+            0xc4: (self.CPY, "ZP"),
+            0xc5: (self.CMP, "ZP"),
+            0xc6: (self.DEC, "ZP"),
+            0xc7: (self.DCP, "ZP"),
+            0xc8: (self.INY, None),
+            0xc9: (self.CMP, "IMM"),
+            0xca: (self.DEX, None),
+            0xcb: (self.AXS, "IMM"),
+            0xcc: (self.CPY, "ABS"),
+            0xcd: (self.CMP, "ABS"),
+            0xce: (self.DEC, "ABS"),
+            0xcf: (self.DCP, "ABS"),
+
+            0xd0: (self.BNE, "REL"),
+            0xd1: (self.CMP, "IND_Y"),
+            0xd2: None,
+            0xd3: (self.DCP, "IND_Y"),
+            0xd4: (self.NOP, "ZP_X"),
+            0xd5: (self.CMP, "ZP_X"),
+            0xd6: (self.DEC, "ZP_X"),
+            0xd7: (self.DCP, "ZP_X"),
+            0xd8: (self.CLD, None),
+            0xd9: (self.CMP, "ABS_Y"),
+            0xda: (self.NOP, None),
+            0xdb: (self.DCP, "ABS_Y"),
+            0xdc: (self.NOP, "ANS_X"),
+            0xdd: (self.CMP, "ANS_X"),
+            0xde: (self.DEC, "ANS_X"),
+            0xdf: (self.DCP, "ANS_X"),
+
+            0xe0: (self.CPX, "IMM"),
+            0xe1: (self.SBC, "IND_X"),
+            0xe2: (self.NOP, "IMM"),
+            0xe3: (self.ISC, "IND_X"),
+            0xe4: (self.CPX, "ZP"),
+            0xe5: (self.SBC, "ZP"),
+            0xe6: (self.INC, "ZP"),
+            0xe7: (self.ISC, "ZP"),
+            0xe8: (self.INX, None),
+            0xe9: (self.SBC, "IMM"),
+            0xea: (self.NOP, None),
+            0xeb: (self.SBC, "IMM"),
+            0xec: (self.CPX, "ABS"),
+            0xed: (self.SBC, "ABS"),
+            0xee: (self.INC, "ABS"),
+            0xef: (self.ISC, "ABS"),
+
+            0xf0: (self.BEQ, "REL"),
+            0xf1: (self.SBC, "IND_Y"),
+            0xf2: None,
+            0xf3: (self.ISC, "IND_Y"),
+            0xf4: (self.NOP, "ZP_X"),
+            0xf5: (self.SBC, "ZP_X"),
+            0xf6: (self.INC, "ZP_X"),
+            0xf7: (self.ISC, "ZP_X"),
+            0xf8: (self.SED, None),
+            0xf9: (self.SBC, "ABS_Y"),
+            0xfa: (self.NOP, None),
+            0xfb: (self.ISC, "ABS_Y"),
+            0xfc: (self.NOP, "ABS_X"),
+            0xfd: (self.SBC, "ABS_X"),
+            0xfe: (self.INC, "ABS_X"),
+            0xff: (self.ISC, "ABS_X"),
+        }
+
+    def step(self):
+        # Get the opcode via next_word()
+        opcode = self.next_word()
+
+        # Before we look for extra info like immediate values or memory addresses,
+        # we need to look up the opcode to get its addressing type.
+
+        
+
     def next_word(self):
         word = self.ram.get(self.reg.PC)
         self.reg.PC += 1
         return word
+
+    def next_two(self): # like next_word except gets two words as a 16-bit value
+        return (self.next_word() << 8) | self.next_word()
 
     def push(self, value):
         self.ram.set(self.reg.SP, value)
@@ -154,6 +456,13 @@ class CPU():
         self.reg.SP += 1
         return self.ram.get(self.reg.SP)
 
+    # Addressing modes
+    def addr_indirect(self, add_to_index=0, add_to_address=0):
+        zp = (self.next_word + add_to_index) & 0xff
+        address = (((self.ram.get(zp) << 8) | (self.ram.get(zp+1)) + add_to_address) & 0xffff
+        return self.ram.get(address)
+
+    # Instructions
     def ADC(self, value):
         """Add value to A with carry
 

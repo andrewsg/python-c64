@@ -180,6 +180,7 @@ class CPU():
         Note: An Arithmetic shift normally preserves the Most Significant Bit (MSb) or "Sign bit" of the source value.
         ASL does NOT do this on the 6502.
         The 6502 places a copy of the sign from the result of a Logical Shift Left into the sigN Flag (P.N)
+        This instruction would be better named as SLS (logical Shift Left and update Sign)
 
         Writes flags: N, Z, C
 
@@ -222,178 +223,200 @@ class CPU():
         if self.reg.Z:
             self.reg.PC += value
 
-##################
+    def BIT(self, value):
+        """Test bits in A with M
 
-"""
-    def pop_addr(self):
-        address = self.reg.sp
-        self.reg.sp += 1
-        return address
+        Has no return value and updates no "real" registers; only affects flags
 
-    def push_addr(self):
-        self.reg.sp -= 1
-        return self.reg.sp
+        Writes flags: N, V, Z
+        """
+        result = self.reg.A & value
+        self.reg.N = result >> 7
+        self.reg.V = result >> 6 & 1
+        self.reg.Z = result == 0
 
-    def peek_addr(self):
-        return self.reg.sp
+    def BMI(self, value):
+        """Branch (add value to PC) iff reg.N is 1
 
-    def needs_next_word(self, operand):
-        return (0x10 <= operand <= 0x17) or operand in [0x1e, 0x1f]
+        Value in this case should be an actual signed Python integer! ("relative" addressing)
 
-    # This has side effects (it can increment PC or affect SP)
-    def address_for_operand(self, operand):
-        if self.needs_next_word(operand):
-            self.cycle += 1
-        try:
-            return self.operands[operand](operand)
-        except KeyError:
-            return None
+        Reads flags: N
+        """
+        if self.reg.N:
+            self.reg.PC += value
 
-    # This has no side effects except in the case of code=0x1f, in which case PC++
-    def get_by_address(self, address, code=None):
-        if address is None and code is not None:
-            if code == 0x1f:
-                return self.next_word()
-            elif 0x20 <= code <= 0x3f:
-                return code - 0x20
-        elif isinstance(address, int):
-            return self.ram.get(address)
-        else:
-            return self.reg[address]
+    def BNE(self, value):
+        """Branch (add value to PC) iff reg.Z is 0
 
-    def set_by_address(self, address, value):
-        if isinstance(address, int):
-            self.ram.set(address, value)
-        else:
-            self.reg[address] = value
+        Value in this case should be an actual signed Python integer! ("relative" addressing)
 
-    def get_by_code(self, code, return_addr=False):
-        addr = self.address_for_operand(code)
-        value = self.get_by_address(addr, code=code)
-        return value if not return_addr else (value, addr)
+        Reads flags: Z
+        """
+        if not self.reg.Z:
+            self.reg.PC += value
 
-    def set_by_code(self, code, value):
-        addr = self.address_for_operand(code)
-        if addr:
-            self.set_by_address(addr, value)
-        else:
-            pass
+    def BPL(self, value):
+        """Branch (add value to PC) iff reg.N is 0
 
-    def step(self):
-        word = self.next_word()
-        b, a, o = decompile_word(word)
+        Value in this case should be an actual signed Python integer! ("relative" addressing)
 
-        opcode = Opcode(o)
-        if opcode == Opcode.NONBASIC:
-            opcode = NonBasicOpcode(a)
-            a, b = b, None
+        Reads flags: N
+        """
+        if not self.reg.N:
+            self.reg.PC += value
 
-        a_val, addr = self.get_by_code(a, return_addr=True)
-        operation = getattr(self, opcode.name)
-        if not isinstance(opcode, NonBasicOpcode):
-            b_val = self.get_by_code(b)
-            operation(a_val, b_val, addr)
-        else:
-            operation(a_val, addr)
+    def BRK(self, *_):
+        raise NotImplementedError
 
-    def SET(self, a, b, addr):
-        self.cycle += 1
-        self.set_by_address(addr, b)
+    def BVC(self, value):
+        """Branch (add value to PC) iff reg.V is 0
 
-    def ADD(self, a, b, addr):
-        self.cycle += 2
-        value = a + b
-        self.set_by_address(addr, value)
-        self.reg.o = 0 if value < 2**16 else 0x0001
+        Value in this case should be an actual signed Python integer! ("relative" addressing)
 
-    def SUB(self, a, b, addr):
-        self.cycle += 2
-        value = a - b
-        self.set_by_address(addr, value)
-        self.reg.o = 0 if value >= 0 else 0xffff
+        Reads flags: V
+        """
+        if not self.reg.V:
+            self.reg.PC += value
 
-    def MUL(self, a, b, addr):
-        self.cycle += 2
-        self.set_by_address(addr, a*b)
-        self.reg.o = ((a*b)>>16)&0xffff
+    def BVS(self, value):
+        """Branch (add value to PC) iff reg.V is 1
 
-    def DIV(self, a, b, addr):
-        self.cycle += 3
-        try:
-            self.set_by_address(addr, a // b)
-            self.reg.o = ((a<<16)//b)&0xffff
-        except ZeroDivisionError:
-            self.set_by_address(addr, 0)
+        Value in this case should be an actual signed Python integer! ("relative" addressing)
 
-    def MOD(self, a, b, addr):
-        self.cycle += 3
-        try:
-            self.set_by_address(addr, a % b)
-        except ZeroDivisionError:
-            self.set_by_address(addr, 0)
+        Reads flags: V
+        """
+        if self.reg.V:
+            self.reg.PC += value
 
-    def SHL(self, a, b, addr):
-        self.cycle += 2
-        self.set_by_address(addr, a<<b)
-        self.reg.o = ((a<<b)>>16)&0xffff
+    def CLC(self, *_):
+        """Clear carry flag
+        
+        Writes flags: C
+        """
+        self.reg.C = 0
 
-    def SHR(self, a, b, addr):
-        self.cycle += 2
-        self.set_by_address(addr, a>>b)
-        self.reg.o = ((a<<16)>>b)&0xffff
+    def CLD(self, *_):
+        """Clear decimal flag
+        
+        Writes flags: D
+        """
+        self.reg.D = 0
 
-    def AND(self, a, b, addr):
-        self.cycle += 1
-        self.set_by_address(addr, a & b)
+    def CLI(self, *_):
+        """Clear interrupt (disable) flag
+        
+        Writes flags: I
+        """
+        self.reg.I = 0
 
-    def BOR(self, a, b, addr):
-        self.cycle += 1
-        self.set_by_address(addr, a | b)
+    def CLV(self, *_):
+        """Clear overflow flag
+        
+        Writes flags: V
+        """
+        self.reg.V = 0
 
-    def XOR(self, a, b, addr):
-        self.cycle += 1
-        self.set_by_address(addr, a ^ b)
+    def _compare(self, value, target):
+        """Generic implementation of CMP, CPX, CPY"""
+        result = getattr(self.reg, target) - value
+        self.reg.N = result >> 7
+        self.reg.C = getattr(self.reg, target) >= value
+        self.reg.Z = result == 0
 
-    def IFE(self, a, b, addr):
-        self.cycle += 2
-        if a == b:
-            pass
-        else:
-            self.skip_next_and_cycle()
+    def CMP(self, value):
+        """Compare A with value
 
-    def IFN(self, a, b, addr):
-        self.cycle += 2
-        if a != b:
-            pass
-        else:
-            self.skip_next_and_cycle()
+        Usually followed by a conditional branch
 
-    def IFG(self, a, b, addr):
-        self.cycle += 2
-        if a > b:
-            pass
-        else:
-            self.skip_next_and_cycle()
+        Writes flags: N, C, Z
+        """
+        self._compare(value, 'A')
 
-    def IFB(self, a, b, addr):
-        self.cycle += 2
-        if a & b != 0:
-            pass
-        else:
-            self.skip_next_and_cycle()
+    def CPX(self, value):
+        """Compare X with value
 
-    def skip_next_and_cycle(self):
-        word = self.next_word() # this increments PC!
-        b, a, o = decompile_word(word)
-        if self.needs_next_word(a):
-            self.next_word()
-        if self.needs_next_word(b):
-            self.next_word()
-        self.cycle += 1
+        Usually followed by a conditional branch
 
-    def JSR(self, a, addr):
-        self.cycle += 2
-        addr = self.push_addr()
-        self.set_by_address(addr, self.reg.pc)
-        self.reg.pc = a
-"""
+        Writes flags: N, C, Z
+        """
+        self._compare(value, 'X')
+
+    def CPY(self, value):
+        """Compare Y with value
+
+        Usually followed by a conditional branch
+
+        Writes flags: N, C, Z
+        """
+        self._compare(value, 'Y')
+
+    def DEC(self, value):
+        """Decrement value by one and return
+
+        Writes flags: N, Z
+        """
+        result = (value - 1) & 0xff
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        return result
+
+    def _dec_or_inc_register(self, target, increment=True):
+        """Generic implementation of DEX, DEY, INX, INY"""
+        result = (getattr(self.reg, target) + (1 if increment else -1)) & 0xff
+        self.reg.Z = result == 0
+        self.reg.N = result >> 7
+        setattr(self.reg, target, result)
+
+    def DEX(self, *_):
+        """Decrement X by one
+
+        Writes flags: Z, N
+        """
+        self._dec_or_inc_register('X', increment=False)
+
+    def DEY(self, *_):
+        """Decrement Y by one
+
+        Writes flags: Z, N
+        """
+        self._dec_or_inc_register('Y', increment=False)
+
+    def EOR(self, value):
+        """Bitwise eXclusive OR between A and value -- sets A
+
+        Known as XOR on other platforms
+
+        Writes flags: N, Z
+        """
+        result = self.reg.A ^ value
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        self.reg.A = result
+
+    def INC(self, value):
+        """Increment value by one and return
+
+        Writes flags: N, Z
+        """
+        result = (value + 1) & 0xff
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        return result
+
+    def INX(self, *_):
+        """Increment X by one
+
+        Writes flags: Z, N
+        """
+        self._dec_or_inc_register('X', increment=True)
+
+    def INY(self, *_):
+        """Decrement Y by one
+
+        Writes flags: Z, N
+        """
+        self._dec_or_inc_register('Y', increment=True)
+
+
+
+

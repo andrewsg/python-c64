@@ -257,3 +257,140 @@ def test_BEQ(cpu, pc, z, value, exp_pc, exp_p):
     cpu.BEQ(value)
     assert cpu.reg.PC == exp_pc
     assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("a, value, exp_p", [
+    (0b00000000, 0b11111111, 0b00000010),
+    (0b11111111, 0b11111111, 0b11000000),
+    (0b10000000, 0b11111111, 0b10000000),
+    (0b01000000, 0b11111111, 0b01000000),
+])
+def test_BIT(cpu, a, value, exp_p):
+    cpu.reg.A = a
+    cpu.BIT(value)
+    assert cpu.reg.P == exp_p
+    assert cpu.reg.A == a # hasn't changed
+
+@pytest.mark.parametrize("pc, n, value, exp_pc, exp_p", [
+    (0x0002, 0, 2, 0x0002, 0b00000000),
+    (0x0002, 1, 2, 0x0004, 0b10000000),
+    (0x0004, 1, -2, 0x0002, 0b10000000),
+])
+def test_BMI(cpu, pc, n, value, exp_pc, exp_p):
+    cpu.reg.PC = pc
+    cpu.reg.N = n
+    cpu.BMI(value)
+    assert cpu.reg.PC == exp_pc
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("pc, z, value, exp_pc, exp_p", [
+    (0x0002, 1, 2, 0x0002, 0b00000010),
+    (0x0002, 0, 2, 0x0004, 0b00000000),
+    (0x0004, 0, -2, 0x0002, 0b00000000),
+])
+def test_BNE(cpu, pc, z, value, exp_pc, exp_p):
+    cpu.reg.PC = pc
+    cpu.reg.Z = z
+    cpu.BNE(value)
+    assert cpu.reg.PC == exp_pc
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("pc, n, value, exp_pc, exp_p", [
+    (0x0002, 1, 2, 0x0002, 0b10000000),
+    (0x0002, 0, 2, 0x0004, 0b00000000),
+    (0x0004, 0, -2, 0x0002, 0b00000000),
+])
+def test_BPL(cpu, pc, n, value, exp_pc, exp_p):
+    cpu.reg.PC = pc
+    cpu.reg.N = n
+    cpu.BPL(value)
+    assert cpu.reg.PC == exp_pc
+    assert cpu.reg.P == exp_p
+
+# BRK NYI
+
+@pytest.mark.parametrize("pc, v, value, exp_pc, exp_p", [
+    (0x0002, 1, 2, 0x0002, 0b01000000),
+    (0x0002, 0, 2, 0x0004, 0b00000000),
+    (0x0004, 0, -2, 0x0002, 0b00000000),
+])
+def test_BVC(cpu, pc, v, value, exp_pc, exp_p):
+    cpu.reg.PC = pc
+    cpu.reg.V = v
+    cpu.BVC(value)
+    assert cpu.reg.PC == exp_pc
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("pc, v, value, exp_pc, exp_p", [
+    (0x0002, 0, 2, 0x0002, 0b00000000),
+    (0x0002, 1, 2, 0x0004, 0b01000000),
+    (0x0004, 1, -2, 0x0002, 0b01000000),
+])
+def test_BVS(cpu, pc, v, value, exp_pc, exp_p):
+    cpu.reg.PC = pc
+    cpu.reg.V = v
+    cpu.BVS(value)
+    assert cpu.reg.PC == exp_pc
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("flag", ['C', 'D', 'I', 'V'])
+def test_clear_commands(cpu, flag):
+    getattr(cpu, "CL" + flag)()
+    assert cpu.reg.P == 0b00000000
+    setattr(cpu.reg, flag, 1)
+    getattr(cpu, "CL" + flag)()
+    assert cpu.reg.P == 0b00000000
+
+@pytest.mark.parametrize("command, target", [
+    ('CMP', 'A'),
+    ('CPY', 'Y'),
+    ('CPX', 'X'),
+])
+@pytest.mark.parametrize("state, value, exp_p", [
+    (0x00, 0x00, 0b00000011),
+    (0x40, 0x20, 0b00000001),
+    (0x20, 0x40, 0b10000000),
+    (0xff, 0xff, 0b00000011),
+])
+def test_compare_commands(cpu, command, target, state, value, exp_p):
+    setattr(cpu.reg, target, state)
+    getattr(cpu, command)(value)
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("command, value, exp_p", [
+    ('DEC', 0x01, 0b00000010),
+    ('DEC', 0xfb, 0b10000000),
+    ('DEC', 0x02, 0b00000000),
+    ('DEC', 0x00, 0b10000000),
+    ('INC', 0xff, 0b00000010),
+    ('INC', 0xfb, 0b10000000),
+    ('INC', 0x02, 0b00000000),
+])
+def test_DEC_INC(cpu, command, value, exp_p):
+    expected_value = (value + (1 if command == "INC" else -1)) & 0xff
+    assert getattr(cpu, command)(value) == expected_value
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("command, value, exp_p", [
+    ('DEX', 0x02, 0b00000000),
+    ('DEY', 0x02, 0b00000000),
+    ('DEX', 0x01, 0b00000010),
+    ('DEY', 0x01, 0b00000010),
+    ('DEX', 0xfb, 0b10000000),
+    ('DEY', 0xfb, 0b10000000),
+    ('DEX', 0x00, 0b10000000),
+    ('DEY', 0x00, 0b10000000),
+    ('INX', 0x02, 0b00000000),
+    ('INY', 0x02, 0b00000000),
+    ('INX', 0xff, 0b00000010),
+    ('INY', 0xff, 0b00000010),
+    ('INX', 0xfb, 0b10000000),
+    ('INY', 0xfb, 0b10000000),
+])
+def test_DEX_DEY_INX_INY(cpu, command, value, exp_p):
+    setattr(cpu.reg, command[2], value)
+    getattr(cpu, command)()
+    assert getattr(cpu.reg, command[2]) == (value + (1 if command.startswith("IN") else -1)) & 0xff
+    assert cpu.reg.P == exp_p
+
+def test_EOR(cpu):
+    raise Exception("You still need to write this one")

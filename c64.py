@@ -56,7 +56,8 @@ class Register(object):
 class ReadOnlyRegister(Register):
     def set(self, value):
         if self._value != sanitize_value(value, self.word_length):
-            raise NotImplementedError
+            raise NotImplementedError("Can't write %s to read-only register bit; "
+                                      "are you trying to write an invalid value to e.g. SP?" % value)
         else:
             pass # Silently do nothing if no bits would change anyways
 
@@ -138,12 +139,20 @@ class CPU():
         if isinstance(initial_ram, RAM):
             self.ram = initial_ram
         else:
-            self.ram = RAM(word_length=8, size=0xffff, initial_contents=initial_ram)
+            self.ram = RAM(word_length=8, size=0x10000, initial_contents=initial_ram)
 
     def next_word(self):
         word = self.ram.get(self.reg.PC)
         self.reg.PC += 1
         return word
+
+    def push(self, value):
+        self.ram.set(self.reg.SP, value)
+        self.reg.SP -= 1
+
+    def pop(self):
+        self.reg.SP += 1
+        return self.ram.get(self.reg.SP)
 
     def ADC(self, value):
         """Add value to A with carry
@@ -266,7 +275,25 @@ class CPU():
             self.reg.PC += value
 
     def BRK(self, *_):
-        raise NotImplementedError
+        """Simulates an Interrupt REquest (IRQ)
+
+        The copy of reg.B in the CPU is not changed (remains 0)
+        The copy of reg.B which is pushed to the stack is changed (set to 1)
+
+        Simulates an interrupt in all but one respect:
+        The return address that is placed on the stack is incremented by 1
+        This means that the byte following a BRK command will not be executed upon return.
+        The most straightforward solution here is simply to place a NOP after every BRK.
+        """
+        # first, increment PC. Awkwardly, this overshoots the instruction after BRK, but that's a c64 bug and not an emulator bug
+        self.reg.PC += 1
+        # now write the PC to the stack in two steps
+        self.push(self.reg.PCH)
+        self.push(self.reg.PCL)
+        # write processor flags to the stack
+        self.push(self.reg.P | 0b00010000) # this logical OR forces the B flag set on write to stack only
+        # set PC from the 16 bytes at 0xfffe and 0xffff
+        self.reg.PC = self.ram.get(0xffff) | (self.ram.get(0xfffe) << 8)
 
     def BVC(self, value):
         """Branch (add value to PC) iff reg.V is 0
@@ -417,6 +444,235 @@ class CPU():
         """
         self._dec_or_inc_register('Y', increment=True)
 
+    def JMP(self, value):
+        """GOTO address (set PC)"""
+        self.reg.PC = value
 
+    def JSR(self, value):
+        """Jump to subroutine
 
+        Push PC-1 (the location of the JSR call itself) to the stack, then set PC
+        """
+        self.reg.PC -= 1 # no problem mutating state here since it's about to be overwritten
+        self.push(self.reg.PCH)
+        self.push(self.reg.PCL)
+        self.reg.PC = value
 
+    def _load(self, target, value):
+        """Generic impl of LDA, LDX, LDY"""
+        setattr(self.reg, target, value)
+        self.reg.N = value >> 7
+        self.reg.Z = value == 0
+
+    def LDA(self, value):
+        """Load A with value
+        
+        Writes flags: N, Z
+        """
+        self._load('A', value)
+
+    def LDX(self, value):
+        """Load X with value
+        
+        Writes flags: N, Z
+        """
+        self._load('X', value)
+
+    def LDY(self, value):
+        """Load Y with value
+        
+        Writes flags: N, Z
+        """
+        self._load('Y', value)
+
+    def LSR(self, value):
+        """Logical shift right
+
+        Writes flags: N, C, Z
+        """
+        self.reg.N = 0
+        self.reg.C = value & 0b1
+        result = value >> 1 & 0b01111111 # logical AND to cover case where > 8-bit value is specified
+        self.reg.Z = result == 0
+        return result
+
+    def NOP(self, *_):
+        """Do nothing"""
+        pass
+
+    def ORA(self, value):
+        """Bitwise OR between A and value -- sets A
+
+        Writes flags: N, Z
+        """
+        result = self.reg.A | value
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        self.reg.A = result
+
+    def PHA(self, *_):
+        """Pushes A onto the stack.
+        
+        Be sure to pop it before returning from a subroutine!
+        """
+        self.push(self.reg.A)
+
+    def PHP(self, *_):
+        """Pushes P onto the stack.
+        
+        Be sure to pop it before returning from a subroutine!
+        """
+        self.push(self.reg.P)
+
+    def PLA(self, *_):
+        """Pops from the stack to A.
+        
+        Writes flags: N, Z
+        """
+        result = self.pop()
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        self.reg.A = result
+
+    def PLP(self, *_):
+        """Pops from the stack to P."""
+        self.reg.P = self.pop()
+
+    def ROL(self, value):
+        """Rotate bits left, with carry.
+
+        Writes flags: C, Z, N
+        """
+        carry = value << 7
+        result = ((value << 1) & 0b11111110) | self.reg.C
+        self.reg.C = carry
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        return result
+
+    def ROR(self, value):
+        """Rotate bits right, with carry.
+
+        Writes flags: C, Z, N
+        """
+        carry = value & 0b1
+        result = ((value >> 1) & 0b01111111) | (0b10000000 if self.reg.C else 0)
+        self.reg.C = carry
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        return result
+
+    def RTI(self, value):
+        """Return from interrupt
+        
+        Unlike RTS, this restores P from the stack and does NOT increment PC
+        """
+        self.reg.P = self.pop()
+        self.reg.PCL = self.pop()
+        self.reg.PCH = self.pop()
+
+    def RTS(self, value):
+        """Return from subroutine
+        
+        Increments PC in the process
+        """
+        self.reg.PCL = self.pop()
+        self.reg.PCH = self.pop()
+        self.reg.PC += 1
+
+    def SBC(self, value):
+        """Subtract value from A with borrow.
+
+        There is no "subtract without carry" instruction.
+        The result depends on the C flag, so when performing single precision math,
+        or just before the first operation of multi precision math, the C flag must
+        be set with SEC before this operation.
+
+        The D flag changes the behavior of this operation.
+
+        Reads flags: C
+        Writes flags: D, V, C, N, Z
+        """
+        if self.reg.D:
+            result = bcd(self.reg.A) - bdc(value) - 1 if not self.reg.C else 0
+            self.reg.V = result > 99 or result < 0
+        else:
+            result = self.reg.A - value - 1 if not self.reg.C else 0
+            self.reg.V = result > 127 or result < 128
+        self.reg.C = result >= 0
+        self.reg.N = result >> 7
+        self.reg.Z = result == 0
+        self.reg.A = result
+
+    def SEC(self, value):
+        """Set carry flag.
+
+        Writes flag: C
+        """
+        self.reg.C = 1
+
+    def SED(self, value):
+        """Set decimal flag.
+
+        Writes flag: D
+        """
+        self.reg.D = 1
+
+    def SEI(self, value):
+        """Set interrupt (disable) flag.
+
+        Writes flag: I
+        """
+        self.reg.I = 1
+
+    def STA(self, *_):
+        """return A"""
+        return self.reg.A
+
+    def STX(self, *_):
+        """return X"""
+        return self.reg.X
+
+    def STY(self, *_):
+        """return Y"""
+        return self.reg.Y
+
+    def TAX(self, *_):
+        """Transfer A to X"""
+        self.reg.X = self.reg.A
+        self.reg.N = self.reg.X << 7
+        self.reg.Z = self.reg.X == 0
+
+    def TAY(self, *_):
+        """Transfer A to Y"""
+        self.reg.Y = self.reg.A
+        self.reg.N = self.reg.Y << 7
+        self.reg.Z = self.reg.Y == 0
+
+    def TSX(self, *_):
+        """Transfer S(P) to X
+
+        This is the only way to retrieve the stack pointer."""
+        self.reg.X = self.reg.S
+        self.reg.N = self.reg.X << 7
+        self.reg.Z = self.reg.X == 0
+
+    def TXA(self, *_):
+        """Transfer X to A"""
+        self.reg.A = self.reg.X
+        self.reg.N = self.reg.A << 7
+        self.reg.Z = self.reg.A == 0
+
+    def TXS(self, *_):
+        """Transfer X to SP
+        
+        This is the only way to set the stack pointer to an arbitrary value."""
+        self.reg.S = self.reg.X
+        self.reg.N = self.reg.S << 7
+        self.reg.Z = self.reg.S == 0
+
+    def TYA(self, *_):
+        """Transfer Y to A"""
+        self.reg.A = self.reg.Y
+        self.reg.N = self.reg.A << 7
+        self.reg.Z = self.reg.A == 0

@@ -117,7 +117,7 @@ def test_cpu_init():
     cpu = c64.CPU()
     assert cpu.reg.PC == 0
     assert cpu.reg.SP == 0x100
-    assert cpu.ram.size == 0xffff
+    assert cpu.ram.size == 0x10000
     assert cpu.ram.word_length == 8
     assert cpu.ram.get(0) == 0
 
@@ -125,7 +125,7 @@ def test_cpu_init_with_defaults():
     cpu = c64.CPU(initial_registers={'PC': 0x1234}, initial_ram=[0xff, 0x02])
     assert cpu.reg.PC == 0x1234
     assert cpu.reg.SP == 0x100
-    assert cpu.ram.size == 0xffff
+    assert cpu.ram.size == 0x10000
     assert cpu.ram.word_length == 8
     assert cpu.ram.get(0) == 0xff
     assert cpu.ram.get(1) == 0x02
@@ -306,7 +306,25 @@ def test_BPL(cpu, pc, n, value, exp_pc, exp_p):
     assert cpu.reg.PC == exp_pc
     assert cpu.reg.P == exp_p
 
-# BRK NYI
+@pytest.mark.parametrize("pc, destination_pc, sp, p", [
+    (0x1234, 0x00ff, 0x1aa, 0b11000001),
+    (0x5234, 0x12dd, 0x1bb, 0b00001000),
+    (0x6234, 0x44cc, 0x1cc, 0b00000000),
+    (0x0000, 0x00aa, 0x1dd, 0b00010000), # This is only an assumption of what the c64 would do if B = 1
+])
+def test_BRK(cpu, pc, destination_pc, sp, p):
+    cpu.reg.PC = pc
+    cpu.reg.SP = sp
+    cpu.reg.P = p
+    cpu.ram.set(0xfffe, destination_pc >> 8)
+    cpu.ram.set(0xffff, destination_pc & 0xff)
+    cpu.BRK()
+    assert cpu.reg.PC == destination_pc
+    assert cpu.reg.SP == sp - 3
+    assert cpu.reg.P == p
+    assert cpu.ram.get(sp) == (pc + 1) >> 8
+    assert cpu.ram.get(sp-1) == (pc + 1) & 0xff
+    assert cpu.ram.get(sp-2) == p | 0b00010000 # is B flag set in the stack's copy of P?
 
 @pytest.mark.parametrize("pc, v, value, exp_pc, exp_p", [
     (0x0002, 1, 2, 0x0002, 0b01000000),
@@ -392,5 +410,54 @@ def test_DEX_DEY_INX_INY(cpu, command, value, exp_p):
     assert getattr(cpu.reg, command[2]) == (value + (1 if command.startswith("IN") else -1)) & 0xff
     assert cpu.reg.P == exp_p
 
-def test_EOR(cpu):
-    raise Exception("You still need to write this one")
+@pytest.mark.parametrize("a, value, exp_a, exp_p", [
+    (0b00000000, 0b00000000, 0b00000000, 0b00000010),
+    (0b00001000, 0b00000000, 0b00001000, 0b00000000),
+    (0b01000000, 0b11000000, 0b10000000, 0b10000000),
+])
+def test_EOR(cpu, a, value, exp_a, exp_p):
+    cpu.reg.A = a
+    cpu.EOR(value)
+    assert cpu.reg.A == exp_a
+    assert cpu.reg.P == exp_p
+
+def test_JMP(cpu):
+    cpu.reg.PC = 0x00ff
+    cpu.JMP(0x00aa)
+    assert cpu.reg.PC == 0x00aa
+
+def test_JSR(cpu):
+    cpu.reg.PC = 0x02ff
+    cpu.reg.SP = 0x1cc
+    cpu.JSR(0x00aa)
+    assert cpu.ram.get(0x1cc) == 0x02
+    assert cpu.ram.get(0x1cc-1) == 0xff-1
+    assert cpu.reg.SP == 0x1cc-2
+    assert cpu.reg.PC == 0x00aa
+
+@pytest.mark.parametrize("target", ["A", "X", "Y"])
+@pytest.mark.parametrize("value, exp_p", [
+    (0x14, 0b00000000),
+    (0xf1, 0b10000000),
+    (0x00, 0b00000010),
+])
+def test_LDA_LDX_LDY(cpu, target, value, exp_p):
+    setattr(cpu.reg, target, 0x87)
+    getattr(cpu, 'LD' + target)(value)
+    assert getattr(cpu.reg, target) == value
+    assert cpu.reg.P == exp_p
+
+@pytest.mark.parametrize("value, exp_result, exp_p", [
+    (0b10101010, 0b01010101, 0b00000000),
+    (0b01010101, 0b00101010, 0b00000001),
+    (0b00000001, 0b00000000, 0b00000011),
+    (0b00000000, 0b00000000, 0b00000010),
+])
+def test_LSR(cpu, value, exp_result, exp_p):
+    assert cpu.LSR(value) == exp_result
+    assert cpu.reg.P == exp_p
+
+def test_NOP(cpu):
+    exp_p = cpu.reg.P
+    cpu.NOP()
+    assert cpu.reg.P == exp_p

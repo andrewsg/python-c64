@@ -665,7 +665,7 @@ class CPU():
 
     def TXS(self, *_):
         """Transfer X to SP
-        
+
         This is the only way to set the stack pointer to an arbitrary value."""
         self.reg.S = self.reg.X
         self.reg.N = self.reg.S << 7
